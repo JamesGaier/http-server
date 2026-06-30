@@ -1,14 +1,42 @@
 use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt, Error, ReadHalf, Lines};
 use std::sync::{Arc, Mutex};
 use std::ops::DerefMut;
 
-
-async fn handle_connection(_socket: TcpStream, con_num: Arc<Mutex<i32>>) {
-    {
-        let mut con_num = con_num.lock().unwrap();
-        println!("Accepted connection {con_num}");
-        *con_num += 1;
+type MessageHeader = Result<Option<String>, Error>;
+fn get_header(header: MessageHeader) -> String {
+    match header {
+        Ok(opt_line) => {
+            match opt_line {
+                Some(line) => {
+                    line
+                },
+                None => {
+                    eprintln!("Line from http request is empty");
+                    String::new()
+                },
+            }
+        },
+        Err(err) => {
+            eprintln!("{err:?}");
+            String::new()
+        },
     }
+}
+
+async fn handle_connection(mut stream: TcpStream) {
+    let (mut rx, mut tx) = io::split(stream);
+    let buf_reader = BufReader::new(&mut rx);
+
+    let header = buf_reader.lines().next_line().await;
+    let line = get_header(header);
+    
+    // TODO: Reject if any other type of request other than GET or HEAD
+
+
+    // TODO: Run ls command 
+    
+    // TODO: Return files from current directory
 }
 
 #[tokio::main]
@@ -31,7 +59,6 @@ async fn main() {
     };
     
     
-    let con_num = Arc::new(Mutex::new(0));
     loop {
         let socket_res = listener.accept().await;
         let socket = match socket_res {
@@ -45,9 +72,8 @@ async fn main() {
             },
         };
         
-        let con_num = con_num.clone();
         tokio::spawn(async move {
-            handle_connection(socket, con_num).await;
+            handle_connection(socket).await;
         });
     }
 
