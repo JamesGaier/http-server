@@ -1,0 +1,21 @@
+<!DOCTYPE HTML PUBLIC>
+<html>
+ <head>
+  <title>Index of <%= index %></title>
+ </head>
+ <body>
+<h1>Index of <%= index %></h1>
+<pre><img src="/icons/blank.gif" alt="Icon "> <a href="?C=N;O=D">Name</a>                                        <a href="?C=M;O=A">Last modified</a>      <a href="?C=S;O=A">Size</a>  <a href="?C=D;O=A">Description</a><hr><img src="/icons/back.gif" alt="[PARENTDIR]"> <a href="/pub/archive/fedora/linux/releases/11/Live/">Parent Directory</a>                                                 -   
+<% for link in links { %>
+  <li style="list-style-type:none"><a href="<%= link %>"><%= link %></a></li>
+<% } %> 
+<hr></pre>
+<p>
+Note: The Fedora releases here are no longer supported or maintained, so they do not receive bug fixes or security updates.  We do <strong>not</strong> recommend using these releases any more.  To obtain the latest, supported version of Fedora, please refer to the <a href="http://get.fedoraproject.org/">main download page</a>.  
+</p>
+
+<p>
+For more information about Fedora's support cycle see the <a href="http://fedoraproject.org/wiki/LifeCycle">life cycle</a> page.
+</p>
+</body></html>
+
