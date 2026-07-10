@@ -1,17 +1,25 @@
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{self, AsyncWriteExt, BufReader, AsyncBufReadExt, Error};
-use tokio::fs::{read_dir, metadata};
+use tokio::fs::{read_dir, metadata, canonicalize};
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
-use sailfish::TemplateSimple;
 use std::env::current_dir;
+use std::path::PathBuf;
 use regex::Regex;
+use std::collections::HashMap;
+use handlebars::Handlebars;
+//use serde_json::{json, Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 
+#[derive(Serialize, Deserialize)]
+struct Link {
+    href: String,
+    file_name: String,
+}
 
-#[derive(TemplateSimple)]
-#[template(path = "file_tree.stpl")]
-struct FileTreeTemplate {
+#[derive(Serialize, Deserialize)]
+struct Template {
     index: String,
-    links: Vec<String>
+    links: Vec<Link>
 }
 
 type MessageHeader = Result<Option<String>, Error>;
@@ -48,7 +56,6 @@ async fn handle_connection(stream: TcpStream) {
     let re = Regex::new(r"GET (/[a-zA-Z0-9-_.]+)+ HTTP/1.1").unwrap();
     let mut path: String = String::from("");
     if re.is_match(&line) {
-
         // get the path from the GET request
         let tokens = line.split_whitespace().collect::<Vec<&str>>(); 
         if tokens.len() > 2 {
@@ -82,44 +89,39 @@ async fn handle_connection(stream: TcpStream) {
         }
     };
 
-    let combined = dir.clone() + &path;
+    //let combined = dir.clone() + &path;
+    let mut cur_path = PathBuf::from(dir.clone());
+    cur_path.push(&path);
     
-    let mut valid_dir = false;
-    let mut valid_file = false;
-    match metadata(combined.clone()).await {
-        Ok(meta) => {
-            valid_dir = meta.file_type().is_dir();
-            valid_file = meta.file_type().is_file();
-        },
-        Err(err) => {
-            // TODO: Add a redirect to the 404 page
-            println!(" {combined:?} {err:?}");
-        },
-    };
-
-
     // change the directory the process is looking at to this one
-    
-    if !valid_dir && !valid_file {
+    if !cur_path.is_dir() && !cur_path.is_file() {
         return
     }
 
-    let dirs = read_dir(combined.clone()).await;
+    let mut template = Template {
+        index: String::from(""),
+        links: vec![]
+    };
+    template.index = String::from(cur_path.to_str().unwrap());
+    let dirs = read_dir(cur_path).await;
     // fill the vector with a list of directories and files
-    let mut links: Vec<String> = Vec::new();
     if let Ok(dirs) = dirs {
             let mut dirs = ReadDirStream::new(dirs);
             while let Some(dir) = dirs.next().await {
                 if let Ok(dir) = dir {
-                    let raw_dir = dir.path().display().to_string();
-                    //let start = 2;
-                    //links.push(raw_dir[start..].to_string());
-                    links.push(raw_dir[0..].to_string());
+                    let dir = dir.path();
+                    let tst = dir.file_name().unwrap().to_str().unwrap().to_string();
+                    let tst1 = canonicalize(dir).await.unwrap();
+
+                    template.links.push(Link{
+                        href: tst1.to_str().unwrap().to_string(),
+                        file_name: tst,
+                    });
                 }
             }
     } 
+
     
-    // TODO: Make index update when you click a link
     // TODO: Save and update current directory for session
     // TODO: do basic input validation on url
     // TODO: server icons
@@ -127,15 +129,14 @@ async fn handle_connection(stream: TcpStream) {
     // TODO: clean up the code 
     // TODO: DONE!
     
+    let mut handlebars = Handlebars::new();
+    handlebars
+        .register_template_file("file_tree", "templates/file_tree.hbs");
     
-    // setup templated html
-    let template = FileTreeTemplate { 
-        index: dir,
-        links 
-    };
-
     // populate template with fields
-    let contents = template.render_once().unwrap();
+    //let contents = template.render_once().unwrap();
+    let contents = handlebars.render("file_tree", &template).unwrap();
+    println!("{contents:?}");
 
     // format http response
     let length = contents.len();
