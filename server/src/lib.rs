@@ -49,13 +49,13 @@ where
         return Err(std::io::Error::new(ErrorKind::InvalidData, err_msg));
     }
 
-    if let Ok(contents) = handlebars.render(&name, template) {
+    if let Ok(contents) = handlebars.render(name, template) {
         let length = contents.len();
         return Ok(format_http_response(status, length, contents));
     }
 
     let err_msg = format!("Could not render template file {}", name);
-    return Err(std::io::Error::new(ErrorKind::InvalidData, err_msg));
+    Err(std::io::Error::new(ErrorKind::InvalidData, err_msg))
 }
 
 const OK_STATUS: &str = "HTTP/1.1 200 OK";
@@ -70,10 +70,10 @@ fn get_header(header: MessageHeader) -> Result<String, std::io::Error> {
         return Ok(header_res);
     }
 
-    return Err(std::io::Error::new(
+    Err(std::io::Error::new(
         ErrorKind::InvalidInput,
         "Empty http request header",
-    ));
+    ))
 }
 
 fn format_http_response(status_line: &str, length: usize, contents: String) -> String {
@@ -103,7 +103,7 @@ fn get_path(line: String) -> Result<String, std::io::Error> {
         return Err(std::io::Error::new(ErrorKind::InvalidInput, err_msg));
     }
 
-    return Ok(String::new());
+    Ok(String::new())
 }
 
 async fn serve<T: AsyncRead + AsyncWrite>(
@@ -124,7 +124,7 @@ async fn serve<T: AsyncRead + AsyncWrite>(
 
     // check if the path is a valid one.  If its not it is not safe to use this url
     if !cur_path.is_dir() && !cur_path.is_file() {
-        return Err(std::io::Error::new(ErrorKind::Other, "Path does not exist"));
+        return Err(std::io::Error::other("Path does not exist"));
     }
 
     let mut template = FileServer {
@@ -144,7 +144,7 @@ async fn serve<T: AsyncRead + AsyncWrite>(
     if !cur_path.is_dir() && cur_path.is_file() {
         let file_str = read_to_string(cur_path).await?;
         let response_str = format_http_response(OK_STATUS, file_str.len(), file_str);
-        return Ok(tx.write_all(response_str.as_bytes()).await?);
+        return tx.write_all(response_str.as_bytes()).await;
     }
 
     let dirs = read_dir(cur_path).await?;
@@ -153,10 +153,9 @@ async fn serve<T: AsyncRead + AsyncWrite>(
     let mut dirs = ReadDirStream::new(dirs);
     while let Some(dir) = dirs.next().await {
         if let Ok(dir) = dir {
-            let mut download_text = String::from("");
+            let mut download = String::from("");
             if dir.file_type().await?.is_file() {
-                println!("is file");
-                download_text = String::from("download");
+                download = String::from("download");
             }
 
             let dir = dir.path();
@@ -188,9 +187,9 @@ async fn serve<T: AsyncRead + AsyncWrite>(
             let href = href.to_str().unwrap().to_string();
 
             template.links.push(Link {
-                href: href,
-                file_name: file_name,
-                download: download_text,
+                href,
+                file_name,
+                download,
             });
         }
     }
@@ -198,7 +197,7 @@ async fn serve<T: AsyncRead + AsyncWrite>(
     let file_str = read_to_string(OK_PAGE).await?;
     let result = build_response("file_tree", &file_str, OK_STATUS, &template);
 
-    return Ok(tx.write_all(result?.as_bytes()).await?);
+    tx.write_all(result?.as_bytes()).await
 }
 
 pub async fn handle_connection(stream: TcpStream) {
@@ -237,7 +236,6 @@ pub async fn handle_connection(stream: TcpStream) {
         // shrug not much we can do if the socket won't write
         if let Err(err) = tx.write_all(result.as_bytes()).await {
             eprintln!("{err:?}");
-            return;
         }
     }
 }
