@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bytes = "1"
 handlebars = "6.4.2"
 regex = "1.12.4"
 sailfish = "0.11.2"

@@ -1,14 +1,14 @@
+use std::io::ErrorKind;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{self, AsyncWriteExt, BufReader, AsyncBufReadExt, Error};
-use tokio::fs::{read_dir, metadata, canonicalize};
+use tokio::io::{self, AsyncWriteExt, BufReader, AsyncBufReadExt, AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
+use tokio::fs::{read_dir, canonicalize};
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
 use std::env::current_dir;
-use std::path::PathBuf;
 use regex::Regex;
-use std::collections::HashMap;
 use handlebars::Handlebars;
-//use serde_json::{json, Serialize, Deserialize};
 use serde::{Serialize, Deserialize};
+use std::sync::Mutex;
+use tokio::fs::read_to_string;
 
 #[derive(Serialize, Deserialize)]
 struct Link {
@@ -16,184 +16,242 @@ struct Link {
     file_name: String,
 }
 
+
 #[derive(Serialize, Deserialize)]
-struct Template {
+struct FileServer {
     index: String,
     links: Vec<Link>
 }
 
-type MessageHeader = Result<Option<String>, Error>;
-fn get_header(header: MessageHeader) -> String {
-    match header {
-        Ok(opt_line) => {
-            match opt_line {
-                Some(line) => {
-                    line
-                },
-                None => {
-                    eprintln!("Line from http request is empty");
-                    String::new()
-                },
-            }
-        },
-        Err(err) => {
-            eprintln!("{err:?}");
-            String::new()
-        },
-    }
+#[derive(Serialize, Deserialize, Debug)]
+struct ErrorTemplate {
+    error_msg: String
 }
 
-async fn handle_connection(stream: TcpStream) {
-    let (mut rx, mut tx) = io::split(stream);
-    let buf_reader = BufReader::new(&mut rx);
 
-    let header = buf_reader.lines().next_line().await;
-    let line = get_header(header);
-    
-    let status_line = "HTTP/1.1 200 OK";
+/// Builds an HTTP 1.1 response
+/// Returns either a vector of bytes or a generic error type 
+/// * `name` - The name of the template to be registered
+/// * `file_str` - The string handlebars is parsing
+/// * `status` - The status code for the http message
+fn build_response<T>(name: &str, file_str: &str, status: &str, template: &T) -> Result<String, std::io::Error>
+where
+T: Serialize
+{
+    let mut handlebars = Handlebars::new();
+    if handlebars.register_template_string(name, file_str).is_err() {
+        let err_msg = format!("Could not register handlebars template with name {}", name);
+        return Err(std::io::Error::new(ErrorKind::InvalidData, err_msg));
+    }
 
-    // check that the path is a valid path
-    let re = Regex::new(r"GET (/[a-zA-Z0-9-_.]+)+ HTTP/1.1").unwrap();
-    let mut path: String = String::from("");
+    if let Ok(contents) = handlebars.render(&name, template) {
+        let length = contents.len();
+        return Ok(format_http_response(status, length, contents));
+    }
+
+
+    let err_msg = format!("Could not render template file {}", name);
+    return Err(std::io::Error::new(ErrorKind::InvalidData, err_msg));
+}
+
+
+
+const OK_STATUS: &str = "HTTP/1.1 200 OK";
+const ERR_STATUS: &str = "HTTP/1.1 404";
+const OK_PAGE: &str = "templates/file_tree.hbs";
+const ERR_PAGE: &str = "templates/404.hbs";
+
+type MessageHeader = Result<Option<String>, std::io::Error>;
+fn get_header(header: MessageHeader) -> Result<String, std::io::Error> {
+    let header_res = header?;
+    if let Some(header_res) = header_res {
+        return Ok(header_res);
+    }
+
+    return Err(std::io::Error::new(ErrorKind::InvalidInput, "Empty http request header"));
+}
+
+
+fn format_http_response(status_line: &str, length: usize, contents: String) -> String {
+    format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}")
+}
+
+fn get_path(line: String) -> Result<String, std::io::Error> {
+    let re = Regex::new(r"GET (/[a-zA-Z0-9-_.]+)+ HTTP/1.1");
+    let mut err_msg = format!("HTTP Request has invalid regex {}", line);
+    let path_err = std::io::Error::new(ErrorKind::InvalidInput, err_msg);
+
+    if let Err(re_err) = re {
+        eprintln!("{}", re_err);
+        return Err(path_err);
+    }
+
+    let re = re.unwrap();
+
     if re.is_match(&line) {
         // get the path from the GET request
         let tokens = line.split_whitespace().collect::<Vec<&str>>(); 
         if tokens.len() > 2 {
-           path = String::from(tokens[1]);  
+           return Ok(String::from(tokens[1]));
         }
+        
+        err_msg = format!("HTTP Request type is invalid {} ", line);
+        return Err(std::io::Error::new(ErrorKind::InvalidInput, err_msg));
     }
 
-    // switch to using rusts Path object
+    return Ok(String::new());
+}
 
-    // TODO: cd to the directory from the path if the path is a directory and not a file
-    // get the current path
 
-    // I am a little iffy on this... I do not see an async way to do this
-    // so I am using the env function I would assume this doesn't block
-    // so its probably okay??
-    let dir = match current_dir() {
-        Ok(dir) => {
-            match dir.into_os_string().into_string() {
-                Ok(dir) => {
-                    dir
-                },
-                Err(err) => {
-                    eprintln!("{err:?}");
-                    String::new()
-                }
-            }
-        },
-        Err(err) => {
-            eprintln!("{err:?}");
-            String::new()
-        }
-    };
+async fn serve<T: AsyncRead + AsyncWrite>(rx: &mut ReadHalf<T>, tx: &mut WriteHalf<T>) -> io::Result<()> {
+    let buf_reader = BufReader::new(rx);
 
-    //let combined = dir.clone() + &path;
-    let mut cur_path = PathBuf::from(dir.clone());
+    let header = buf_reader
+        .lines()
+        .next_line().await;
+
+    let line = get_header(header)?;
+    
+    let path = get_path(line)?;
+
+    
+    let mut cur_path = current_dir()?;
     cur_path.push(&path);
     
-    // change the directory the process is looking at to this one
+    // check if the path is a valid one.  If its not it is not safe to use this url
     if !cur_path.is_dir() && !cur_path.is_file() {
-        return
+        return Err(std::io::Error::new(ErrorKind::Other, "Path does not exist"));
     }
 
-    let mut template = Template {
+    let mut template = FileServer {
         index: String::from(""),
         links: vec![]
     };
-    template.index = String::from(cur_path.to_str().unwrap());
-    let dirs = read_dir(cur_path).await;
+
+    if cur_path.to_str().is_none() {
+        return Err(std::io::Error::new(ErrorKind::InvalidData, "Failed to parse path to str"));
+    }
+
+    template.index = cur_path
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let dirs = read_dir(cur_path).await?;
     // fill the vector with a list of directories and files
-    if let Ok(dirs) = dirs {
-            let mut dirs = ReadDirStream::new(dirs);
-            while let Some(dir) = dirs.next().await {
-                if let Ok(dir) = dir {
-                    let dir = dir.path();
-                    let tst = dir.file_name().unwrap().to_str().unwrap().to_string();
-                    let tst1 = canonicalize(dir).await.unwrap();
+    let mut dirs = ReadDirStream::new(dirs);
+    while let Some(dir) = dirs.next().await {
+        if let Ok(dir) = dir {
+            let dir = dir.path();
 
-                    template.links.push(Link{
-                        href: tst1.to_str().unwrap().to_string(),
-                        file_name: tst,
-                    });
-                }
+            let dir_err = std::io::Error::new(ErrorKind::InvalidData, "Failed to parse file name to str");
+
+            if dir.file_name().is_none() {
+                return Err(dir_err);
             }
-    } 
 
-    
-    // TODO: Save and update current directory for session
-    // TODO: do basic input validation on url
-    // TODO: server icons
-    // TODO: Serve 404 page if all resources are not able to be fetched and display error
-    // TODO: clean up the code 
-    // TODO: DONE!
-    
-    let mut handlebars = Handlebars::new();
-    handlebars
-        .register_template_file("file_tree", "templates/file_tree.hbs");
-    
-    // populate template with fields
-    //let contents = template.render_once().unwrap();
-    let contents = handlebars.render("file_tree", &template).unwrap();
-    println!("{contents:?}");
+            let file_name_opt = dir
+                .file_name()
+                .unwrap();
 
-    // format http response
-    let length = contents.len();
-    let response = 
-        format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
-
-    // serialize
-    let bytes = response.as_bytes();
-
-    // write response and handle errors
-    match tx.write_all(bytes).await {
-        Ok(response) => {
-            if response != () {
-               println!("{response:?}"); 
+            if file_name_opt.to_str().is_none() {
+                return Err(dir_err);
             }
-        },
-        Err(err) => {
+
+            let file_name = file_name_opt
+                .to_str()
+                .unwrap()
+                .to_string();
+
+            let href = canonicalize(dir).await?;
+
+            if href.to_str().is_none() {
+                return Err(std::io::Error::new(ErrorKind::InvalidData, "Failed to parse href to str"));
+            }
+
+            let href = href
+                .to_str()
+                .unwrap()
+                .to_string();
+
+            template.links.push(Link{
+                href: href,
+                file_name: file_name,
+            });
+        }
+    }
+    
+    let file_str = read_to_string(OK_PAGE).await?;
+    let result = build_response(
+        "file_tree",
+        &file_str,
+        OK_STATUS,
+        &template
+    );
+
+    return Ok(tx.write_all(result?.as_bytes()).await?);
+}
+
+async fn handle_connection(stream: TcpStream) {
+    let (mut rx, mut tx) = io::split(stream);
+    if let Err(err) =  serve::<tokio::net::TcpStream>(&mut rx, &mut tx).await {
+        
+        let file_str = read_to_string(ERR_PAGE).await;
+
+        // If we can't even read the 404 not found then we can't serve
+        // the user an error
+        if let Err(file_parse_err) = file_str {
+            eprintln!("{file_parse_err:?}");
+            return;  
+        }
+
+        let file_str  = file_str.unwrap();
+
+        let template = ErrorTemplate {
+            error_msg: err.to_string()
+        };
+        let result = build_response(
+            "error_page",
+            &file_str,
+            ERR_STATUS,
+            &template
+        );
+
+        // not much we can do here either... maybe just write the error no template as a last 
+        // resort
+        if let Err(err) = result {
+            if let Err(err) = tx.write_all(err.to_string().as_bytes()).await {
+                eprintln!("{err:?}");
+                return;
+            }
+
             eprintln!("{err:?}");
-        },
+            return;
+        }
+
+        let result = result.unwrap();
+
+        // shrug not much we can do if the socket won't write
+        if let Err(err) = tx.write_all(result.as_bytes()).await {
+            eprintln!("{err:?}");
+            return;
+        }
     }
 }
 
 #[tokio::main]
-async fn main() {
-    let url = "127.0.0.1:8080";
+async fn main() -> io::Result<()> {
+    const URL: &str = "127.0.0.1:8080";
+    let listener = TcpListener::bind(&URL).await?;
+    println!("Listening on {URL}");
 
-    let listener = loop {
-        println!("Creating listener on port {url}");
-        let listener_res = TcpListener::bind(&url).await;
-
-        match listener_res {
-            Ok(listener) => {
-                break listener 
-            },
-            Err(err) => {
-                eprintln!("{err:#?}");
-            },
-        }
-    };
-    
-    
     loop {
-        let socket_res = listener.accept().await;
-        let socket = match socket_res {
-            Ok((socket, addr)) => {
-                println!("Accepted connection from {addr}");
-                socket
-            },
-            Err(err) => {
-                eprintln!("{err:#?}");  
-                continue
-            },
-        };
-        
-        tokio::spawn(async move {
-            handle_connection(socket).await;
-        });
+        if let Ok((socket, addr)) = listener.accept().await {
+            println!("Accepted connection from {addr}");
+            tokio::spawn(async move {
+                handle_connection(socket).await;
+            });
+        } 
     }
 
 }
