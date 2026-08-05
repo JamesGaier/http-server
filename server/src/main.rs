@@ -14,13 +14,14 @@ use tokio::fs::read_to_string;
 struct Link {
     href: String,
     file_name: String,
+    download: String,
 }
 
 
 #[derive(Serialize, Deserialize)]
 struct FileServer {
     index: String,
-    links: Vec<Link>
+    links: Vec<Link>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -115,6 +116,7 @@ async fn serve<T: AsyncRead + AsyncWrite>(rx: &mut ReadHalf<T>, tx: &mut WriteHa
     let path = get_path(line)?;
 
     
+    // using sync io check that this is okay?
     let mut cur_path = current_dir()?;
     cur_path.push(&path);
     
@@ -125,7 +127,7 @@ async fn serve<T: AsyncRead + AsyncWrite>(rx: &mut ReadHalf<T>, tx: &mut WriteHa
 
     let mut template = FileServer {
         index: String::from(""),
-        links: vec![]
+        links: vec![],
     };
 
     if cur_path.to_str().is_none() {
@@ -137,11 +139,24 @@ async fn serve<T: AsyncRead + AsyncWrite>(rx: &mut ReadHalf<T>, tx: &mut WriteHa
         .unwrap()
         .to_string();
 
+    if !cur_path.is_dir() && cur_path.is_file() {
+        let file_str = read_to_string(cur_path).await?;
+        let response_str = format_http_response(OK_STATUS, file_str.len(), file_str);
+        return Ok(tx.write_all(response_str.as_bytes()).await?);
+    }
+
     let dirs = read_dir(cur_path).await?;
+
     // fill the vector with a list of directories and files
     let mut dirs = ReadDirStream::new(dirs);
     while let Some(dir) = dirs.next().await {
         if let Ok(dir) = dir {
+            let mut download_text = String::from("");
+            if dir.file_type().await?.is_file() {
+                println!("is file");
+                download_text = String::from("download");
+            }
+
             let dir = dir.path();
 
             let dir_err = std::io::Error::new(ErrorKind::InvalidData, "Failed to parse file name to str");
@@ -177,6 +192,7 @@ async fn serve<T: AsyncRead + AsyncWrite>(rx: &mut ReadHalf<T>, tx: &mut WriteHa
             template.links.push(Link{
                 href: href,
                 file_name: file_name,
+                download: download_text
             });
         }
     }
