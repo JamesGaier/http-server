@@ -11,7 +11,7 @@ struct Cli {
     host: Option<String>, // Either a hostname or an ip address
 
     #[arg(short, long, value_name = "PORT")]
-    port: Option<u16>,    // a valid port number
+    port: Option<u16>, // a valid port number
 }
 
 // TODO: Add unit tests for the server module
@@ -20,7 +20,6 @@ async fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
     let mut server_host = String::from("localhost");
-
     if let Some(host) = cli.host {
         // use host validator to make sure host is valid
         if hostname_validator::is_valid(&host) {
