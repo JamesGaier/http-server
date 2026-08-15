@@ -16,6 +16,7 @@ struct Cli {
 }
 
 // TODO: Add unit tests for the server module
+// TODO: Add option to log to a file
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let cli = Cli::parse();
