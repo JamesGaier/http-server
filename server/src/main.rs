@@ -52,7 +52,7 @@ async fn main() -> io::Result<()> {
     // the second arm is a future which will block forever
     tokio::select! {
         _ = resp_rx => {
-            println!("CTRL+C pressed!");
+            eprintln!("CTRL+C pressed!");
         },
         _ = async {
             loop {
