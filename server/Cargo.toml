@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 bytes = "1"
+clap = { version = "4.6.6", features = ["derive"] }
 handlebars = "6.4.2"
+hostname-validator = "1.1.1"
 regex = "1.12.4"
 sailfish = "0.11.2"
 serde = { version = "1", features = ["derive"] }

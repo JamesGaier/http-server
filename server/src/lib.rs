@@ -1,29 +1,30 @@
 use handlebars::Handlebars;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::env::current_dir;
 use std::io::ErrorKind;
+use std::path::PathBuf;
 use tokio::fs::read_to_string;
 use tokio::fs::{canonicalize, read_dir};
 use tokio::io::{
     self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
 };
 use tokio::net::TcpStream;
+use tokio::process::Command;
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
 
 /// Holds link data
 #[derive(Serialize, Deserialize)]
 struct Link {
-    href: String,  // a link url to be displayed
+    href: String,      // a link url to be displayed
     file_name: String, // the name of the file or directory to be displayed
-    download: String, // text appended to a link tag if the link represents a file
+    download: String,  // text appended to a link tag if the link represents a file
 }
 
 /// Represents files in a directory where the file server is being run
 #[derive(Serialize, Deserialize)]
 struct FileServer {
-    index: String, // The path from where current files are being displayed
-    links: Vec<Link>, // a list of links 
+    index: String,    // The path from where current files are being displayed
+    links: Vec<Link>, // a list of links
 }
 
 /// Contains error message information to be displayed when a request cannot be processed
@@ -150,8 +151,18 @@ async fn serve<T: AsyncRead + AsyncWrite>(
 
     let path = get_path(line)?;
 
-    // using sync io check that this is okay?
-    let mut cur_path = current_dir()?;
+    // get the current path
+    let cur_path = Command::new("pwd").output().await?;
+
+    // convert the byte array from the process stdout output to a String
+    let utf_path = String::from_utf8(cur_path.stdout);
+
+    // Cruft.  Remove this once you convert everything over to dyn std::error::Error + Send + Sync
+    if utf_path.is_err() {
+        return Err(std::io::Error::other(utf_path.err().unwrap().to_string()));
+    }
+
+    let mut cur_path = PathBuf::from(utf_path.unwrap().trim());
     cur_path.push(&path);
 
     // check if the path is a valid one.  If its not it is not safe to use this url
@@ -192,7 +203,7 @@ async fn serve<T: AsyncRead + AsyncWrite>(
     while let Some(dir) = dirs.next().await {
         // if there is an error return it
         if dir.is_err() {
-           return Err(dir.err().unwrap());
+            return Err(dir.err().unwrap());
         }
 
         // unwrap the result
