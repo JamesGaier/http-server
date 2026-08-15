@@ -18,7 +18,6 @@ struct Cli {
 // TODO: Add unit tests for the server module
 #[tokio::main]
 async fn main() -> io::Result<()> {
-
     let cli = Cli::parse();
 
     let mut server_host = String::from("127.0.0.1");
@@ -40,7 +39,6 @@ async fn main() -> io::Result<()> {
     let listener = TcpListener::bind(&url).await?;
     println!("Listening on {url}");
 
-
     // create a oneshot channel... we are only ever gunna hit CTRL+C once
     let (resp_tx, resp_rx) = oneshot::channel();
     tokio::spawn(async move {
@@ -53,7 +51,7 @@ async fn main() -> io::Result<()> {
     // the first arm is a channel which will block until a message is received
     // the second arm is a future which will block forever
     tokio::select! {
-        val = resp_rx => {
+        _ = resp_rx => {
             println!("CTRL+C pressed!");
         },
         _ = async {
