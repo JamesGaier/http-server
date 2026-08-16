@@ -9,7 +9,6 @@ use tokio::io::{
     self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
 };
 use tokio::net::TcpStream;
-use tokio::process::Command;
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
 
 /// Holds link data
@@ -103,7 +102,7 @@ fn format_http_response(status_line: &str, length: usize, contents: String) -> S
 /// Returns a path or an error if the path does not exist
 /// * `line` - The path from the http request status line
 fn get_path(line: String) -> Result<String, std::io::Error> {
-    let re = Regex::new(r"GET (/[a-zA-Z0-9-_.]+)+ HTTP/1.1");
+    let re = Regex::new(r"GET (/[a-zA-Z0-9-_.]*)+ HTTP/1.1");
     let mut err_msg = format!("HTTP Request has invalid regex {}", line);
     let path_err = std::io::Error::new(ErrorKind::InvalidInput, err_msg);
 
@@ -121,11 +120,15 @@ fn get_path(line: String) -> Result<String, std::io::Error> {
             return Ok(String::from(tokens[1]));
         }
 
+        // I do not really know how to test this point because the regex
+        // would guarentee that you have to have at least 2 tokens...
+        // This is probably dead code but I am going to keep this here unless
+        // This happens
         err_msg = format!("HTTP Request type is invalid {} ", line);
         return Err(std::io::Error::new(ErrorKind::InvalidInput, err_msg));
     }
 
-    Ok(String::new())
+    Err(path_err)
 }
 
 /// Does the following:
@@ -151,19 +154,7 @@ async fn serve<T: AsyncRead + AsyncWrite>(
 
     let path = get_path(line)?;
 
-    // get the current path
-    let cur_path = Command::new("pwd").output().await?;
-
-    // convert the byte array from the process stdout output to a String
-    let utf_path = String::from_utf8(cur_path.stdout);
-
-    // Cruft.  Remove this once you convert everything over to dyn std::error::Error + Send + Sync
-    if utf_path.is_err() {
-        return Err(std::io::Error::other(utf_path.err().unwrap().to_string()));
-    }
-
-    let mut cur_path = PathBuf::from(utf_path.unwrap().trim());
-    cur_path.push(&path);
+    let cur_path = PathBuf::from(path);
 
     // check if the path is a valid one.  If its not it is not safe to use this url
     if !cur_path.is_dir() && !cur_path.is_file() {
@@ -301,4 +292,103 @@ pub async fn handle_connection(stream: TcpStream) {
             eprintln!("{err:?}");
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // tests function that unwraps a HTTP/1.1 request header
+    #[test]
+    fn get_header_test() {
+        // constants
+        const HTTP_ERR_MSG: &str = "Empty http request header";
+        const ERR_MSG: &str = "Error has occurred";
+        const REQUEST_HEADER: &str = "GET / HTTP/1.1";
+
+        // test the working case
+        let header: MessageHeader = Ok(Some(String::from(REQUEST_HEADER)));
+        let header_result = get_header(header);
+        assert!(header_result.is_ok());
+        assert_eq!(header_result.unwrap(), String::from(REQUEST_HEADER));
+
+        // passing an err
+        let bad_header: MessageHeader = Err(std::io::Error::new(ErrorKind::InvalidInput, ERR_MSG));
+        let header_result = get_header(bad_header);
+        assert!(header_result.is_err());
+        assert_eq!(
+            header_result.err().unwrap().to_string(),
+            ERR_MSG.to_string()
+        );
+
+        // passing an ok none
+        let none_header: MessageHeader = Ok(None);
+        let header_result = get_header(none_header);
+        assert!(header_result.is_err());
+        assert_eq!(
+            header_result.err().unwrap().to_string(),
+            HTTP_ERR_MSG.to_string()
+        );
+    }
+
+    #[test]
+    fn test_format_http() {
+        // test that the response function correctly formulates an http response
+        const HTTP_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Length: 34\r\n\r\nI am a test string of bytes hello!";
+
+        let test_payload = String::from("I am a test string of bytes hello!");
+        let response_str = format_http_response(OK_STATUS, test_payload.len(), test_payload);
+        assert_eq!(response_str, HTTP_RESPONSE);
+    }
+
+    // tests the error case for if the HTTP request header is bad
+    fn err_path_tst(header: &str) {
+        let path = get_path(String::from(header));
+        let err = format!("HTTP Request has invalid regex {}", header);
+        assert!(path.is_err());
+        assert!(path.as_ref().err().is_some());
+        assert_eq!(path.as_ref().err().unwrap().to_string(), err);
+    }
+
+    #[test]
+    fn test_get_path() {
+        // correct
+        const REQUEST_HEADER: &str = "GET / HTTP/1.1";
+        const REQUEST_HOME: &str = "GET /home HTTP/1.1";
+        const EXPECTED_PATH: &str = "/";
+        const EXPECTED_HOME_PATH: &str = "/home";
+
+        // unsupported
+        const UNSUPPORTED_HEADER: &str = "POST / HTTP/1.1";
+
+        // wrong
+        const EMPTY_HEADER_PATH: &str = "GET HTTP/1.1";
+        const NON_UTF8_HEADER: &str = "GET /� HTTP/1.1";
+        const MISSING_VERSION: &str = "GET /";
+
+        // life good
+        let path = get_path(String::from(REQUEST_HEADER));
+        assert!(path.is_ok());
+        assert_eq!(path.unwrap(), EXPECTED_PATH.to_string());
+
+        // ok
+        let path = get_path(String::from(REQUEST_HOME));
+        assert!(path.is_ok());
+        assert_eq!(path.unwrap(), EXPECTED_HOME_PATH.to_string());
+
+        // bad!
+        err_path_tst(UNSUPPORTED_HEADER);
+
+        // bad!
+        err_path_tst(EMPTY_HEADER_PATH);
+        
+        // bad!!!!
+        err_path_tst(NON_UTF8_HEADER);
+
+        // missing version
+        err_path_tst(MISSING_VERSION);
+    }
+
+
+
 }
