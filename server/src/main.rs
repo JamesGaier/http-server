@@ -15,8 +15,11 @@ struct Cli {
     port: Option<u16>, // a valid port number
 }
 
-// TODO: Add unit tests for the server module
+// TODO: Add unit tests for the server module: Partly done... need to take out the two biggest
+// functions
 // TODO: Add option to log to a file
+// TODO: Add support for "base dir" option that limits the user to only child directories of the
+// base
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let cli = Cli::parse();
