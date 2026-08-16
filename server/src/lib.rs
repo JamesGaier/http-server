@@ -334,7 +334,8 @@ mod tests {
     #[test]
     fn test_format_http() {
         // test that the response function correctly formulates an http response
-        const HTTP_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Length: 34\r\n\r\nI am a test string of bytes hello!";
+        const HTTP_RESPONSE: &str =
+            "HTTP/1.1 200 OK\r\nContent-Length: 34\r\n\r\nI am a test string of bytes hello!";
 
         let test_payload = String::from("I am a test string of bytes hello!");
         let response_str = format_http_response(OK_STATUS, test_payload.len(), test_payload);
@@ -381,14 +382,11 @@ mod tests {
 
         // bad!
         err_path_tst(EMPTY_HEADER_PATH);
-        
+
         // bad!!!!
         err_path_tst(NON_UTF8_HEADER);
 
         // missing version
         err_path_tst(MISSING_VERSION);
     }
-
-
-
 }
