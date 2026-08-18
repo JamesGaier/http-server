@@ -142,10 +142,14 @@ fn get_path(line: String) -> Result<String, std::io::Error> {
 ///    returns an io result
 /// * `rx` - read handle to a TCP stream
 /// * `tx` - write handle to a TCP stream
-async fn serve<T: AsyncRead + AsyncWrite>(
-    rx: &mut ReadHalf<T>,
-    tx: &mut WriteHalf<T>,
-) -> io::Result<()> {
+async fn serve<Reader, Writer>(
+    rx: &mut Reader,
+    tx: &mut Writer,
+) -> io::Result<()> 
+where
+    Reader: AsyncRead + Unpin,
+    Writer: AsyncWrite + Unpin,
+{
     let buf_reader = BufReader::new(rx);
 
     let header = buf_reader.lines().next_line().await;
@@ -256,7 +260,7 @@ async fn serve<T: AsyncRead + AsyncWrite>(
 /// * `stream` - TCP socket which data can be read from or sent over
 pub async fn handle_connection(stream: TcpStream) {
     let (mut rx, mut tx) = io::split(stream);
-    if let Err(err) = serve::<tokio::net::TcpStream>(&mut rx, &mut tx).await {
+    if let Err(err) = serve(&mut rx, &mut tx).await {
         let file_str = read_to_string(ERR_PAGE).await;
 
         // If we can't even read the 404 not found then we can't serve
@@ -389,4 +393,30 @@ mod tests {
         // missing version
         err_path_tst(MISSING_VERSION);
     }
+
+    #[tokio::test]
+    async fn test_serve() {
+        const HTTP_REQUEST: &str = "GET / undefined\r\nHost: localhost:8080\r\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.9\r\nAccept-Encoding: gzip, deflate, br, zstd\r\nConnection: keep-alive\r\nUpgrade-Insecure-Requests: 1\r\nSec-Fetch-Dest: document\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Site: none\r\nPriority: u=0, i\r\n\r\n";
+        let mut socket = tokio_test::io::Builder::new()
+            .write(HTTP_REQUEST.as_bytes())
+            .build();
+
+        let (mut rx, mut tx) = io::split(socket);
+
+        // TODO: Re-write function so you can mock out all of the I/O
+        let _ = serve(&mut rx, &mut tx).await;
+        println!("After");
+
+        
+        let buf: Vec<u8> = vec![];
+
+        
+        let buf_reader = BufReader::new(rx);
+
+        let my_str = str::from_utf8(buf_reader.buffer());
+        
+
+
+    }
+
 }
