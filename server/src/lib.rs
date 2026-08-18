@@ -410,7 +410,6 @@ Priority: u=0, i\r\n\r\n";
 
         // TODO: Re-write function so you can mock out all of the I/O. i.e. the file system io
         let _ = serve(&mut rx, &mut tx).await;
-        println!("After");
 
         let buf: Vec<u8> = vec![];
 
