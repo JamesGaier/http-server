@@ -391,7 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve() {
-        const HTTP_REQUEST: &str = "GET / undefined\r\n\
+        const HTTP_REQUEST: &str = "GET / HTTP/1.1\r\n\
 Host: localhost:8080\r\n\
 User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0\r\n\
 Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
