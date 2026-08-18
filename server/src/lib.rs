@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use tokio::fs::read_to_string;
 use tokio::fs::{canonicalize, read_dir};
 use tokio::io::{
-    self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
+    self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader,
 };
 use tokio::net::TcpStream;
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
@@ -142,10 +142,7 @@ fn get_path(line: String) -> Result<String, std::io::Error> {
 ///    returns an io result
 /// * `rx` - read handle to a TCP stream
 /// * `tx` - write handle to a TCP stream
-async fn serve<Reader, Writer>(
-    rx: &mut Reader,
-    tx: &mut Writer,
-) -> io::Result<()> 
+async fn serve<Reader, Writer>(rx: &mut Reader, tx: &mut Writer) -> io::Result<()>
 where
     Reader: AsyncRead + Unpin,
     Writer: AsyncWrite + Unpin,
@@ -407,16 +404,10 @@ mod tests {
         let _ = serve(&mut rx, &mut tx).await;
         println!("After");
 
-        
         let buf: Vec<u8> = vec![];
 
-        
         let buf_reader = BufReader::new(rx);
 
         let my_str = str::from_utf8(buf_reader.buffer());
-        
-
-
     }
-
 }
