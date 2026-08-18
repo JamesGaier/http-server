@@ -5,9 +5,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use tokio::fs::read_to_string;
 use tokio::fs::{canonicalize, read_dir};
-use tokio::io::{
-    self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader,
-};
+use tokio::io::{self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
 
@@ -393,7 +391,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve() {
-        const HTTP_REQUEST: &str = "GET / undefined\r\nHost: localhost:8080\r\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.9\r\nAccept-Encoding: gzip, deflate, br, zstd\r\nConnection: keep-alive\r\nUpgrade-Insecure-Requests: 1\r\nSec-Fetch-Dest: document\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Site: none\r\nPriority: u=0, i\r\n\r\n";
+        const HTTP_REQUEST: &str = "GET / undefined\r\n\
+Host: localhost:8080\r\n\
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0\r\n\
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
+Accept-Language: en-US,en;q=0.9\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n\
+Connection: keep-alive\r\n\
+Upgrade-Insecure-Requests: 1\r\n\
+Sec-Fetch-Dest: document\r\n\
+Sec-Fetch-Mode: navigate\r\n\
+Sec-Fetch-Site: none\r\n\
+Priority: u=0, i\r\n\r\n";
         let mut socket = tokio_test::io::Builder::new()
             .write(HTTP_REQUEST.as_bytes())
             .build();
