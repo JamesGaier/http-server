@@ -408,7 +408,7 @@ Priority: u=0, i\r\n\r\n";
 
         let (mut rx, mut tx) = io::split(socket);
 
-        // TODO: Re-write function so you can mock out all of the I/O
+        // TODO: Re-write function so you can mock out all of the I/O. i.e. the file system io
         let _ = serve(&mut rx, &mut tx).await;
         println!("After");
 
