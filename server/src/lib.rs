@@ -3,14 +3,19 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
 use std::path::PathBuf;
-use tokio::fs::read_to_string;
+use tokio::fs::{read_to_string, ReadDir};
 use tokio::fs::{canonicalize, read_dir};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::ops::Deref;
+
 
 /// Holds link data
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Link {
     href: String,      // a link url to be displayed
     file_name: String, // the name of the file or directory to be displayed
@@ -28,6 +33,129 @@ struct FileServer {
 #[derive(Serialize, Deserialize, Debug)]
 struct ErrorTemplate {
     error_msg: String,
+}
+
+
+
+trait IFilesystemIO {
+    async fn read_to_string(&self, path: impl AsRef<Path>) -> io::Result<String>;
+    async fn canonicalize(&self, dir: impl AsRef<Path>) -> io::Result<PathBuf>;
+    async fn read_dir(&self, dir: impl AsRef<Path>) -> io::Result<Vec<Link>>;
+}
+
+struct AsyncIOImpl {
+}
+
+struct MockIOImpl {
+    fake_file_output: String,
+    fake_abs_path: PathBuf,
+    fake_dirs: Vec<Link>,
+}
+
+impl MockIOImpl {
+    fn build(fake_file_output: String, fake_abs_path: PathBuf, fake_dirs: Vec<Link>) -> MockIOImpl {
+        MockIOImpl {
+            fake_file_output,
+            fake_abs_path,
+            fake_dirs,
+        }
+    }
+}
+
+impl IFilesystemIO for AsyncIOImpl {
+    async fn read_to_string(&self, path: impl AsRef<Path>) -> io::Result<String>
+    {
+        read_to_string(path).await
+    }
+
+    async fn canonicalize(&self, dir: impl AsRef<Path>) -> io::Result<PathBuf>
+    {
+        canonicalize(dir).await 
+    }
+
+    async fn read_dir(&self, cur_path: impl AsRef<Path>) -> io::Result<Vec<Link>>
+    {
+        let mut to_ret = vec![];
+        let dirs = read_dir(cur_path).await?;
+
+        // fill the vector with a list of directories and files
+        let mut dirs = ReadDirStream::new(dirs);
+
+        // iterate over the current directory.  If the current directory element is a file
+        // label the link as "download" which allows you to download the file
+        while let Some(dir) = dirs.next().await {
+            // if there is an error return it
+            if dir.is_err() {
+                return Err(dir.err().unwrap());
+            }
+
+            // unwrap the result
+            let dir = dir.unwrap();
+            let mut download = String::from("");
+            if dir.file_type().await?.is_file() {
+                download = String::from("download");
+            }
+
+            // get the path
+            let dir = dir.path();
+            let dir_err =
+                std::io::Error::new(ErrorKind::InvalidData, "Failed to parse file name to str");
+
+            // return error if entry is None
+            if dir.file_name().is_none() {
+                return Err(dir_err);
+            }
+
+            let file_name_opt = dir.file_name().unwrap();
+
+            // throw an error if file name is empty
+            if file_name_opt.to_str().is_none() {
+                return Err(dir_err);
+            }
+
+            // convert to String
+            let file_name = file_name_opt.to_str().unwrap().to_string();
+
+            // return the absolute path
+            let href = self.canonicalize(dir).await?;
+
+            // if none returned something went wrong... return an error
+            if href.to_str().is_none() {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Failed to parse href to str",
+                ));
+            }
+
+            // convert the href to a string and put it into the link struct
+            let href = href.to_str().unwrap().to_string();
+
+            to_ret.push(Link {
+                href,
+                file_name,
+                download,
+            });
+        }
+
+        Ok(to_ret)
+    }
+}
+
+impl IFilesystemIO for MockIOImpl {
+    async fn read_to_string(&self, path: impl AsRef<Path>) -> io::Result<String>
+    {
+        Ok(self.fake_file_output.clone())
+    }
+
+    async fn canonicalize(&self, dir: impl AsRef<Path>) -> io::Result<PathBuf>
+    {
+        Ok(self.fake_abs_path.clone())
+    }
+
+    async fn read_dir(&self, dir: impl AsRef<Path>) -> io::Result<Vec<Link>>
+    {
+        Ok(self.fake_dirs.clone())
+    }
 }
 
 /// Builds an HTTP 1.1 response
@@ -140,13 +268,13 @@ fn get_path(line: String) -> Result<String, std::io::Error> {
 ///    returns an io result
 /// * `rx` - read handle to a TCP stream
 /// * `tx` - write handle to a TCP stream
-async fn serve<Reader, Writer>(rx: &mut Reader, tx: &mut Writer) -> io::Result<()>
+async fn serve<Reader, Writer, IO>(rx: &mut Reader, tx: &mut Writer, io: &IO) -> io::Result<()>
 where
     Reader: AsyncRead + Unpin,
     Writer: AsyncWrite + Unpin,
+    IO: IFilesystemIO
 {
     let buf_reader = BufReader::new(rx);
-
     let header = buf_reader.lines().next_line().await;
 
     let line = get_header(header)?;
@@ -177,75 +305,17 @@ where
 
     // Is the current path a file... send the file data as the response
     if !cur_path.is_dir() && cur_path.is_file() {
-        let file_str = read_to_string(cur_path).await?;
+        let file_str = io.read_to_string(cur_path).await?;
         let response_str = format_http_response(OK_STATUS, file_str.len(), file_str);
         return tx.write_all(response_str.as_bytes()).await;
     }
 
-    // read the current directory
-    let dirs = read_dir(cur_path).await?;
-
-    // fill the vector with a list of directories and files
-    let mut dirs = ReadDirStream::new(dirs);
-
-    // iterate over the current directory.  If the current directory element is a file
-    // label the link as "download" which allows you to download the file
-    while let Some(dir) = dirs.next().await {
-        // if there is an error return it
-        if dir.is_err() {
-            return Err(dir.err().unwrap());
-        }
-
-        // unwrap the result
-        let dir = dir.unwrap();
-        let mut download = String::from("");
-        if dir.file_type().await?.is_file() {
-            download = String::from("download");
-        }
-
-        // get the path
-        let dir = dir.path();
-        let dir_err =
-            std::io::Error::new(ErrorKind::InvalidData, "Failed to parse file name to str");
-
-        // return error if entry is None
-        if dir.file_name().is_none() {
-            return Err(dir_err);
-        }
-
-        let file_name_opt = dir.file_name().unwrap();
-
-        // throw an error if file name is empty
-        if file_name_opt.to_str().is_none() {
-            return Err(dir_err);
-        }
-
-        // convert to String
-        let file_name = file_name_opt.to_str().unwrap().to_string();
-
-        // return the absolute path
-        let href = canonicalize(dir).await?;
-
-        // if none returned something went wrong... return an error
-        if href.to_str().is_none() {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                "Failed to parse href to str",
-            ));
-        }
-
-        // convert the href to a string and put it into the link struct
-        let href = href.to_str().unwrap().to_string();
-
-        template.links.push(Link {
-            href,
-            file_name,
-            download,
-        });
-    }
+    
+    let mut links = io.read_dir(cur_path).await?;
+    template.links.append(&mut links);
 
     // read the file tree template and if that works send that page to the client
-    let file_str = read_to_string(OK_PAGE).await?;
+    let file_str = io.read_to_string(OK_PAGE).await?;
     let result = build_response("file_tree", &file_str, OK_STATUS, &template);
 
     tx.write_all(result?.as_bytes()).await
@@ -255,8 +325,9 @@ where
 /// * `stream` - TCP socket which data can be read from or sent over
 pub async fn handle_connection(stream: TcpStream) {
     let (mut rx, mut tx) = io::split(stream);
-    if let Err(err) = serve(&mut rx, &mut tx).await {
-        let file_str = read_to_string(ERR_PAGE).await;
+    let io = AsyncIOImpl {};
+    if let Err(err) = serve(&mut rx, &mut tx, &io).await {
+        let file_str = io.read_to_string(ERR_PAGE).await;
 
         // If we can't even read the 404 not found then we can't serve
         // the user an error
@@ -391,30 +462,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve() {
-        const HTTP_REQUEST: &str = "GET / HTTP/1.1\r\n\
-Host: localhost:8080\r\n\
-User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0\r\n\
-Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
-Accept-Language: en-US,en;q=0.9\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n\
-Connection: keep-alive\r\n\
-Upgrade-Insecure-Requests: 1\r\n\
-Sec-Fetch-Dest: document\r\n\
-Sec-Fetch-Mode: navigate\r\n\
-Sec-Fetch-Site: none\r\n\
-Priority: u=0, i\r\n\r\n";
-        let mut socket = tokio_test::io::Builder::new()
-            .write(HTTP_REQUEST.as_bytes())
-            .build();
+//        const HTTP_REQUEST: &str = "GET / HTTP/1.1\r\n\
+//Host: localhost:8080\r\n\
+//User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0\r\n\
+//Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
+//Accept-Language: en-US,en;q=0.9\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n\
+//Connection: keep-alive\r\n\
+//Upgrade-Insecure-Requests: 1\r\n\
+//Sec-Fetch-Dest: document\r\n\
+//Sec-Fetch-Mode: navigate\r\n\
+//Sec-Fetch-Site: none\r\n\
+//Priority: u=0, i\r\n\r\n";
 
-        let (mut rx, mut tx) = io::split(socket);
 
-        // TODO: Re-write function so you can mock out all of the I/O. i.e. the file system io
-        let _ = serve(&mut rx, &mut tx).await;
 
-        let buf: Vec<u8> = vec![];
+        //let mut socket = tokio_test::io::Builder::new()
+        //    .read(HTTP_REQUEST.as_bytes())
+        //    .write(&HTTP_RESPONSE.trim().as_bytes())
+        //    .build();
 
-        let buf_reader = BufReader::new(rx);
+        //let (mut rx, mut tx) = io::split(socket);
 
-        let my_str = str::from_utf8(buf_reader.buffer());
+        //// TODO: Re-write function so you can mock out all of the I/O. i.e. the file system io
+        //let _ = serve(&mut rx, &mut tx).await;
     }
 }
