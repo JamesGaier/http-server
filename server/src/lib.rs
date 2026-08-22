@@ -3,19 +3,19 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
 use std::path::PathBuf;
-use tokio::fs::{read_to_string, ReadDir};
+use tokio::fs::{read_to_string};
 use tokio::fs::{canonicalize, read_dir};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::ops::Deref;
+// compiler things this is unused even though its used in my tokio_test lol
+#[allow(unused)]
+use std::ffi::OsStr;
 
 
 /// Holds link data
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct Link {
     href: String,      // a link url to be displayed
     file_name: String, // the name of the file or directory to be displayed
@@ -23,7 +23,7 @@ struct Link {
 }
 
 /// Represents files in a directory where the file server is being run
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct FileServer {
     index: String,    // The path from where current files are being displayed
     links: Vec<Link>, // a list of links
@@ -46,6 +46,8 @@ trait IFilesystemIO {
 struct AsyncIOImpl {
 }
 
+// this code is used... maybe the compiler just doesn't see it because its a tokio_test
+#[allow(unused)]
 struct MockIOImpl {
     fake_file_output: String,
     fake_abs_path: PathBuf,
@@ -53,6 +55,9 @@ struct MockIOImpl {
 }
 
 impl MockIOImpl {
+
+    // this code is used... maybe the compiler just doesn't see it because its a tokio_test
+    #[allow(unused)]
     fn build(fake_file_output: String, fake_abs_path: PathBuf, fake_dirs: Vec<Link>) -> MockIOImpl {
         MockIOImpl {
             fake_file_output,
@@ -142,17 +147,17 @@ impl IFilesystemIO for AsyncIOImpl {
 }
 
 impl IFilesystemIO for MockIOImpl {
-    async fn read_to_string(&self, path: impl AsRef<Path>) -> io::Result<String>
+    async fn read_to_string(&self, _path: impl AsRef<Path>) -> io::Result<String>
     {
         Ok(self.fake_file_output.clone())
     }
 
-    async fn canonicalize(&self, dir: impl AsRef<Path>) -> io::Result<PathBuf>
+    async fn canonicalize(&self, _dir: impl AsRef<Path>) -> io::Result<PathBuf>
     {
         Ok(self.fake_abs_path.clone())
     }
 
-    async fn read_dir(&self, dir: impl AsRef<Path>) -> io::Result<Vec<Link>>
+    async fn read_dir(&self, _dir: impl AsRef<Path>) -> io::Result<Vec<Link>>
     {
         Ok(self.fake_dirs.clone())
     }
@@ -183,7 +188,7 @@ where
 
     // Attempt to render the template with information
     if let Ok(contents) = handlebars.render(name, template) {
-        let length = contents.len();
+        let length = contents.as_bytes().len();
         return Ok(format_http_response(status, length, contents));
     }
 
@@ -268,14 +273,16 @@ fn get_path(line: String) -> Result<String, std::io::Error> {
 ///    returns an io result
 /// * `rx` - read handle to a TCP stream
 /// * `tx` - write handle to a TCP stream
-async fn serve<Reader, Writer, IO>(rx: &mut Reader, tx: &mut Writer, io: &IO) -> io::Result<()>
+async fn serve<Reader, Writer, IO>(rx: Reader, mut tx: Writer, io: &IO) -> io::Result<()>
 where
     Reader: AsyncRead + Unpin,
     Writer: AsyncWrite + Unpin,
     IO: IFilesystemIO
 {
+    println!("Before");
     let buf_reader = BufReader::new(rx);
     let header = buf_reader.lines().next_line().await;
+    println!("After");
 
     let line = get_header(header)?;
 
@@ -316,9 +323,9 @@ where
 
     // read the file tree template and if that works send that page to the client
     let file_str = io.read_to_string(OK_PAGE).await?;
-    let result = build_response("file_tree", &file_str, OK_STATUS, &template);
+    let result = build_response("file_tree", &file_str, OK_STATUS, &template)?;
 
-    tx.write_all(result?.as_bytes()).await
+    tx.write_all(result.as_bytes()).await
 }
 
 /// Serves the client a page that shows the files on the server at the path where the server is being run
@@ -462,28 +469,89 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve() {
-//        const HTTP_REQUEST: &str = "GET / HTTP/1.1\r\n\
-//Host: localhost:8080\r\n\
-//User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0\r\n\
-//Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
-//Accept-Language: en-US,en;q=0.9\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n\
-//Connection: keep-alive\r\n\
-//Upgrade-Insecure-Requests: 1\r\n\
-//Sec-Fetch-Dest: document\r\n\
-//Sec-Fetch-Mode: navigate\r\n\
-//Sec-Fetch-Site: none\r\n\
-//Priority: u=0, i\r\n\r\n";
+
+        const FAKE_RESPONSE_TEXT: &str = "<!DOCTYPE HTML PUBLIC>\r\n\
+<html>\r\n\
+ <head>\r\n\
+  <title>Index of {{index}}</title>\r\n\
+ </head>\r\n\
+ <body>\r\n\
+<h1>Index of {{index}}</h1>\r\n\
+<pre><a href=\"?C=N;O=D\">Name</a>                                        <a href=\"?C=M;O=A\">Last modified</a>      <a href=\"?C=S;O=A\">Size</a>  <a href=\"?C=D;O=A\">Description</a><hr><a href=\"../\">Parent Directory</a>                                                 -\r\n\
+{{#each links}}\r\n\
+  <li style=\"list-style-type:none\"><a href=\"{{href}}\" {{download}}>{{file_name}}</a></li>\r\n\
+{{/each}}\r\n\
+<hr></pre>\r\n\
+</body></html>\r\n";
 
 
+        const BASE_DIR: &str = "/opt/jamesgaier/mystuff";
+        let fake_abs_path: PathBuf = PathBuf::from(OsStr::new(BASE_DIR));
+        let fake_dirs: Vec<Link> = vec![
+            Link {
+                href: format!("{}/dir1", BASE_DIR),
+                file_name: "dir1".to_string(),
+                download: "".to_string(),
+            },
+            Link {
+                href: format!("{}/dir2", BASE_DIR),
+                file_name: "dir2".to_string(),
+                download: "".to_string(),
+            },
+            Link {
+                href: format!("{}/dir3", BASE_DIR),
+                file_name: "dir3".to_string(),
+                download: "".to_string(),
+            },
+        ];
 
-        //let mut socket = tokio_test::io::Builder::new()
-        //    .read(HTTP_REQUEST.as_bytes())
-        //    .write(&HTTP_RESPONSE.trim().as_bytes())
-        //    .build();
 
-        //let (mut rx, mut tx) = io::split(socket);
+        println!("{}", FAKE_RESPONSE_TEXT.to_string());
+        let mockIO = MockIOImpl::build(
+            FAKE_RESPONSE_TEXT.to_string(),
+            fake_abs_path,
+            fake_dirs,
+        );
+        
+        const HTTP_REQUEST: &str = "GET / HTTP/1.1\r\n\
+Host: localhost:8080\r\n\
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0\r\n\
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
+Accept-Language: en-US,en;q=0.9\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n\
+Connection: keep-alive\r\n\
+Upgrade-Insecure-Requests: 1\r\n\
+Sec-Fetch-Dest: document\r\n\
+Sec-Fetch-Mode: navigate\r\n\
+Sec-Fetch-Site: none\r\n\
+Priority: u=0, i\r\n\r\n";
 
-        //// TODO: Re-write function so you can mock out all of the I/O. i.e. the file system io
-        //let _ = serve(&mut rx, &mut tx).await;
+
+        // do this not like this
+        let mut http_response: String = "HTTP/1.1 200 OK\r\n\
+Content-Length: 644\r\n\r\n\
+<!DOCTYPE HTML PUBLIC>\r\n\
+<html>\r\n\
+ <head>\r\n\
+  <title>Index of /</title>\r\n\
+ </head>\r\n\
+ <body>\r\n\
+<h1>Index of /</h1>\r\n\
+<pre><a href=\"?C=N;O=D\">Name</a>                                        <a href=\"?C=M;O=A\">Last modified</a>      <a href=\"?C=S;O=A\">Size</a>  <a href=\"?C=D;O=A\">Description</a><hr><a href=\"../\">Parent Directory</a>                                                 -   \r\n\
+  <li style=\"list-style-type:none\"><a href=\"/opt/jamesgaier/mystuff/dir1\" >/opt/jamesgaier/mystuff/dir1</a></li>\r\n\
+  <li style=\"list-style-type:none\"><a href=\"/opt/jamesgaier/mystuff/dir2\" >/opt/jamesgaier/mystuff/dir2</a></li>\r\n\
+  <li style=\"list-style-type:none\"><a href=\"/opt/jamesgaier/mystuff/dir3\" >/opt/jamesgaier/mystuff/dir3</a></li>\r\n\
+<hr></pre>\r\n\
+</body></html>\r\n".to_string();
+        println!("RESPONSE EXPECTED: {}", http_response);
+        
+        let mut rx = tokio_test::io::Builder::new()
+            .read(HTTP_REQUEST.as_bytes())
+            .build();
+
+        let mut tx = tokio_test::io::Builder::new()
+            .write(http_response.as_bytes())
+            .build();
+
+        let _ = serve(&mut rx, &mut tx, &mockIO).await.unwrap();
     }
 }
