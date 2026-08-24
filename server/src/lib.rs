@@ -3,11 +3,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
 use std::path::PathBuf;
-use tokio::fs::{read_to_string};
+use tokio::fs::{read_to_string, metadata};
 use tokio::fs::{canonicalize, read_dir};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
+//use std::error::Error;
 use std::path::Path;
 // compiler things this is unused even though its used in my tokio_test lol
 #[allow(unused)]
@@ -41,6 +42,8 @@ trait IFilesystemIO {
     async fn read_to_string(&self, path: impl AsRef<Path>) -> io::Result<String>;
     async fn canonicalize(&self, dir: impl AsRef<Path>) -> io::Result<PathBuf>;
     async fn read_dir(&self, dir: impl AsRef<Path>) -> io::Result<Vec<Link>>;
+    async fn is_dir(&self, dir: impl AsRef<Path>) -> io::Result<bool>;
+    async fn is_file(&self, dir: impl AsRef<Path>) -> io::Result<bool>;
 }
 
 struct AsyncIOImpl {
@@ -52,17 +55,25 @@ struct MockIOImpl {
     fake_file_output: String,
     fake_abs_path: PathBuf,
     fake_dirs: Vec<Link>,
+    fake_base_file: bool,
+    fake_base_dir: bool,
+    is_metadata_dir_err: bool,
+    is_metadata_file_err: bool,
 }
 
 impl MockIOImpl {
 
     // this code is used... maybe the compiler just doesn't see it because its a tokio_test
     #[allow(unused)]
-    fn build(fake_file_output: String, fake_abs_path: PathBuf, fake_dirs: Vec<Link>) -> MockIOImpl {
+    fn build(fake_file_output: String, fake_abs_path: PathBuf, fake_dirs: Vec<Link>, fake_base_file: bool, fake_base_dir: bool) -> MockIOImpl {
         MockIOImpl {
             fake_file_output,
             fake_abs_path,
             fake_dirs,
+            fake_base_file,
+            fake_base_dir,
+            is_metadata_dir_err: false,
+            is_metadata_file_err: false,
         }
     }
 }
@@ -144,9 +155,18 @@ impl IFilesystemIO for AsyncIOImpl {
 
         Ok(to_ret)
     }
+
+    async fn is_dir(&self, dir: impl AsRef<Path>) -> io::Result<bool> {
+        Ok(metadata(dir).await?.is_dir())
+    }
+
+    async fn is_file(&self, dir: impl AsRef<Path>) -> io::Result<bool> {
+        Ok(metadata(dir).await?.is_file())
+    }
 }
 
 impl IFilesystemIO for MockIOImpl {
+    // TODO: Make bools on struct then set an error for each of these io functions
     async fn read_to_string(&self, _path: impl AsRef<Path>) -> io::Result<String>
     {
         Ok(self.fake_file_output.clone())
@@ -160,6 +180,22 @@ impl IFilesystemIO for MockIOImpl {
     async fn read_dir(&self, _dir: impl AsRef<Path>) -> io::Result<Vec<Link>>
     {
         Ok(self.fake_dirs.clone())
+    }
+
+    async fn is_dir(&self, _dir: impl AsRef<Path>) -> io::Result<bool> {
+        if self.is_metadata_dir_err {
+            return Err(std::io::Error::new(ErrorKind::InvalidData, "Could not get metadata on file/dir"));
+        }
+
+        Ok(self.fake_base_dir)
+    }
+
+    async fn is_file(&self, _dir: impl AsRef<Path>) -> io::Result<bool> {
+        if self.is_metadata_file_err {
+            return Err(std::io::Error::new(ErrorKind::InvalidData, "Could not get metadata on file/dir"));
+        }
+
+        Ok(self.fake_base_file)
     }
 }
 
@@ -273,25 +309,29 @@ fn get_path(line: String) -> Result<String, std::io::Error> {
 ///    returns an io result
 /// * `rx` - read handle to a TCP stream
 /// * `tx` - write handle to a TCP stream
+/// * `io` - io interface which allows DI so we can mock out actual IO with fake io
 async fn serve<Reader, Writer, IO>(rx: Reader, mut tx: Writer, io: &IO) -> io::Result<()>
 where
     Reader: AsyncRead + Unpin,
     Writer: AsyncWrite + Unpin,
     IO: IFilesystemIO
 {
-    println!("Before");
     let buf_reader = BufReader::new(rx);
     let header = buf_reader.lines().next_line().await;
-    println!("After");
+
 
     let line = get_header(header)?;
 
+    // check if the path is a valid one.  If its not it is not safe to use this url
     let path = get_path(line)?;
 
     let cur_path = PathBuf::from(path);
 
-    // check if the path is a valid one.  If its not it is not safe to use this url
-    if !cur_path.is_dir() && !cur_path.is_file() {
+    // am I a dir or a file
+    let is_dir = io.is_dir(&cur_path).await?;
+    let is_file = io.is_file(&cur_path).await?;
+    
+    if !is_dir && !is_file {
         return Err(std::io::Error::other("Path does not exist"));
     }
 
@@ -311,7 +351,7 @@ where
     template.index = cur_path.to_str().unwrap().to_string();
 
     // Is the current path a file... send the file data as the response
-    if !cur_path.is_dir() && cur_path.is_file() {
+    if !is_dir && is_file {
         let file_str = io.read_to_string(cur_path).await?;
         let response_str = format_http_response(OK_STATUS, file_str.len(), file_str);
         return tx.write_all(response_str.as_bytes()).await;
@@ -467,91 +507,92 @@ mod tests {
         err_path_tst(MISSING_VERSION);
     }
 
+
     #[tokio::test]
     async fn test_serve() {
-
-        const FAKE_RESPONSE_TEXT: &str = "<!DOCTYPE HTML PUBLIC>\r\n\
-<html>\r\n\
- <head>\r\n\
-  <title>Index of {{index}}</title>\r\n\
- </head>\r\n\
- <body>\r\n\
-<h1>Index of {{index}}</h1>\r\n\
-<pre><a href=\"?C=N;O=D\">Name</a>                                        <a href=\"?C=M;O=A\">Last modified</a>      <a href=\"?C=S;O=A\">Size</a>  <a href=\"?C=D;O=A\">Description</a><hr><a href=\"../\">Parent Directory</a>                                                 -\r\n\
-{{#each links}}\r\n\
-  <li style=\"list-style-type:none\"><a href=\"{{href}}\" {{download}}>{{file_name}}</a></li>\r\n\
-{{/each}}\r\n\
-<hr></pre>\r\n\
-</body></html>\r\n";
-
-
-        const BASE_DIR: &str = "/opt/jamesgaier/mystuff";
-        let fake_abs_path: PathBuf = PathBuf::from(OsStr::new(BASE_DIR));
+        // Section one... Setup the mock object 
+        let ok_template = read_to_string(OK_PAGE).await.unwrap();
+        let fake_abs_path: PathBuf = PathBuf::from(OsStr::new("/home/jamesgaier/Desktop"));
         let fake_dirs: Vec<Link> = vec![
             Link {
-                href: format!("{}/dir1", BASE_DIR),
-                file_name: "dir1".to_string(),
+                href: "/home/jamesgaier/Desktop/Fluent-gtk-theme".to_string(),
+                file_name: "Fluent-gtk-theme".to_string(),
                 download: "".to_string(),
             },
             Link {
-                href: format!("{}/dir2", BASE_DIR),
-                file_name: "dir2".to_string(),
+                href: "/home/jamesgaier/Desktop/FramePack".to_string(),
+                file_name: "FramePack".to_string(),
                 download: "".to_string(),
             },
             Link {
-                href: format!("{}/dir3", BASE_DIR),
-                file_name: "dir3".to_string(),
+                href: "/home/jamesgaier/Desktop/Fooocus".to_string(),
+                file_name: "Fooocus".to_string(),
                 download: "".to_string(),
             },
         ];
 
-
-        println!("{}", FAKE_RESPONSE_TEXT.to_string());
-        let mockIO = MockIOImpl::build(
-            FAKE_RESPONSE_TEXT.to_string(),
-            fake_abs_path,
-            fake_dirs,
+        
+        let mock_io = MockIOImpl::build(
+            ok_template.to_string(), // the template
+            fake_abs_path.clone(), // the abs path
+            fake_dirs.clone(), // the links
+            false, // am i a file
+            true, // am i a dir
         );
         
-        const HTTP_REQUEST: &str = "GET / HTTP/1.1\r\n\
-Host: localhost:8080\r\n\
-User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0\r\n\
-Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
-Accept-Language: en-US,en;q=0.9\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n\
-Connection: keep-alive\r\n\
-Upgrade-Insecure-Requests: 1\r\n\
-Sec-Fetch-Dest: document\r\n\
-Sec-Fetch-Mode: navigate\r\n\
-Sec-Fetch-Site: none\r\n\
-Priority: u=0, i\r\n\r\n";
+        // get a test message that I created this should be what the server outputs
+        let http_response = read_to_string("test_messages/page.html").await.unwrap();
 
-
-        // do this not like this
-        let mut http_response: String = "HTTP/1.1 200 OK\r\n\
-Content-Length: 644\r\n\r\n\
-<!DOCTYPE HTML PUBLIC>\r\n\
-<html>\r\n\
- <head>\r\n\
-  <title>Index of /</title>\r\n\
- </head>\r\n\
- <body>\r\n\
-<h1>Index of /</h1>\r\n\
-<pre><a href=\"?C=N;O=D\">Name</a>                                        <a href=\"?C=M;O=A\">Last modified</a>      <a href=\"?C=S;O=A\">Size</a>  <a href=\"?C=D;O=A\">Description</a><hr><a href=\"../\">Parent Directory</a>                                                 -   \r\n\
-  <li style=\"list-style-type:none\"><a href=\"/opt/jamesgaier/mystuff/dir1\" >/opt/jamesgaier/mystuff/dir1</a></li>\r\n\
-  <li style=\"list-style-type:none\"><a href=\"/opt/jamesgaier/mystuff/dir2\" >/opt/jamesgaier/mystuff/dir2</a></li>\r\n\
-  <li style=\"list-style-type:none\"><a href=\"/opt/jamesgaier/mystuff/dir3\" >/opt/jamesgaier/mystuff/dir3</a></li>\r\n\
-<hr></pre>\r\n\
-</body></html>\r\n".to_string();
-        println!("RESPONSE EXPECTED: {}", http_response);
+        // get a request from the browser
+        let http_request = read_to_string("test_messages/http_req.html").await.unwrap();
         
+        // allows me to pass fake data into the read side of the socket and 
+        // verify that the write side's output matches what I put into the write function
         let mut rx = tokio_test::io::Builder::new()
-            .read(HTTP_REQUEST.as_bytes())
+            .read(http_request.as_bytes())
             .build();
 
         let mut tx = tokio_test::io::Builder::new()
             .write(http_response.as_bytes())
             .build();
 
-        let _ = serve(&mut rx, &mut tx, &mockIO).await.unwrap();
+        // we do not care what this returns because the mock classes handle verifying the read and
+        // write is correct
+        let _ = serve(&mut rx, &mut tx, &mock_io).await.unwrap();
+
+
+        // test the case where the metadata is messed up
+        let mut mock_io = MockIOImpl::build(
+            ok_template.to_string(), // the template
+            fake_abs_path.clone(), // the abs path
+            fake_dirs.clone(), // the links
+            false, // am i a file
+            false, // am i a dir
+        );
+        mock_io.is_metadata_dir_err = true;
+        let mut rx = tokio_test::io::Builder::new()
+            .read(http_request.as_bytes())
+            .build();
+
+        let mut tx = tokio_test::io::Builder::new()
+            .build();
+
+        let path_err = serve(&mut rx, &mut tx, &mock_io).await.err();
+        assert!(path_err.is_some());
+        assert_eq!(path_err.unwrap().to_string(), "Could not get metadata on file/dir");
+
+        mock_io.is_metadata_dir_err = false;
+        mock_io.is_metadata_file_err = true;
+        let mut rx = tokio_test::io::Builder::new()
+            .read(http_request.as_bytes())
+            .build();
+
+        let mut tx = tokio_test::io::Builder::new()
+            .build();
+        let path_err = serve(&mut rx, &mut tx, &mock_io).await.err();
+        assert!(path_err.is_some());
+        assert_eq!(path_err.unwrap().to_string(), "Could not get metadata on file/dir");
+
+        
     }
 }
