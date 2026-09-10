@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use tokio::fs::{canonicalize, read_dir};
 use tokio::fs::{metadata, read_to_string};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
 //use std::error::Error;
 use std::path::Path;
@@ -402,9 +401,14 @@ where
 }
 
 /// Serves the client a page that shows the files on the server at the path where the server is being run
-/// * `stream` - TCP socket which data can be read from or sent over
-pub async fn handle_connection(stream: TcpStream) {
-    let (mut rx, mut tx) = io::split(stream);
+/// * `rx` - The read side of a TCP socket
+/// * `tx` - The write side of a TCP socket
+/// * `io` - io functions to be mocked out
+pub async fn handle_connection<Reader, Writer>(mut rx: Reader, mut tx: Writer)
+where
+    Reader: AsyncRead + Unpin,
+    Writer: AsyncWrite + Unpin,
+{
     let io = AsyncIOImpl {};
     if let Err(err) = serve(&mut rx, &mut tx, &io).await {
         let file_str = io.read_to_string(ERR_PAGE).await;
@@ -659,5 +663,48 @@ mod tests {
             "invalid handlebars syntax: expected identifier, helper_parameter, or trailing_tilde_to_omit_whitespace",
         );
         check_readonly_err(&mock_io, &http_request, &err_msg).await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_conn() {
+        let ok_template = read_to_string(OK_PAGE).await.unwrap();
+        let fake_abs_path: PathBuf = PathBuf::from(OsStr::new("/home/jamesgaier/Desktop"));
+        let fake_dirs: Vec<Link> = vec![
+            Link {
+                href: "/home/jamesgaier/Desktop/Fluent-gtk-theme".to_string(),
+                file_name: "Fluent-gtk-theme".to_string(),
+                download: "".to_string(),
+            },
+            Link {
+                href: "/home/jamesgaier/Desktop/FramePack".to_string(),
+                file_name: "FramePack".to_string(),
+                download: "".to_string(),
+            },
+            Link {
+                href: "/home/jamesgaier/Desktop/Fooocus".to_string(),
+                file_name: "Fooocus".to_string(),
+                download: "".to_string(),
+            },
+        ];
+
+        let http_request = read_to_string("test_messages/http_req.html").await.unwrap();
+        let http_response = read_to_string("test_messages/page.html").await.unwrap();
+
+        let mut rx = tokio_test::io::Builder::new()
+            .read(http_request.as_bytes())
+            .build();
+
+        let mut tx = tokio_test::io::Builder::new()
+            .write(http_response.as_bytes())
+            .build();
+
+        let mut mock_io = MockIOImpl::build(
+            ok_template.to_string(), // the template
+            fake_abs_path.clone(),   // the abs path
+            fake_dirs.clone(),       // the links
+            false,                   // am i a file
+            false,                   // am i a dir
+        );
+        let _ = handle_connection(&mut rx, &mut tx).await;
     }
 }

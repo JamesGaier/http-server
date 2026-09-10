@@ -61,11 +61,12 @@ async fn main() -> io::Result<()> {
         _ = async {
             loop {
                 // if you can accept a connection accept it
-                if let Ok((socket, addr)) = listener.accept().await {
+                if let Ok((mut socket, addr)) = listener.accept().await {
                     println!("Accepted connection from {addr}");
                     // pass the task off to another thread
                     tokio::spawn(async move {
-                        handle_connection(socket).await;
+                        let (rx, tx) = socket.split();
+                        handle_connection(rx, tx).await;
                     });
                 }
             }
