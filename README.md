@@ -23,7 +23,7 @@ Options:
 
 ## Being added
 1. Base directory - the option to specify a base directory the user can access on the computer the server is run.  The user is not allowed to access any higher directory in the file tree than the base. Default is /
-2. Non UTF-8 files i.e. images - Currently, I have not coded the server in such a way where it can serve non-utf8 content like images and binaries so I need to figure out how I would go about doing that.
+2. Certian paths with ( or \ break the path in certain places... I probably should be using OsStr instead
 
 
 # Unit test Code Coverage
