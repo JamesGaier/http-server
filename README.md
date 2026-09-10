@@ -27,6 +27,8 @@ Options:
 
 
 # Unit test Code Coverage
+1. This was attained by running `cargo llvm-cov --text`
+
 ```
 Filename                      Regions    Missed Regions     Cover   Functions  Missed Functions  Executed       Lines      Missed Lines     Cover    Branches   Missed Branches     Cover
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
