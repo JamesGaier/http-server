@@ -24,3 +24,13 @@ Options:
 ## Being added
 1. Base directory - the option to specify a base directory the user can access on the computer the server is run.  The user is not allowed to access any higher directory in the file tree than the base. Default is /
 2. Non UTF-8 files i.e. images - Currently, I have not coded the server in such a way where it can serve non-utf8 content like images and binaries so I need to figure out how I would go about doing that.
+
+
+# Unit test Code Coverage
+
+Filename                      Regions    Missed Regions     Cover   Functions  Missed Functions  Executed       Lines      Missed Lines     Cover    Branches   Missed Branches     Cover
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+lib.rs                            671                82    87.78%          39                 0   100.00%         404                46    88.61%           0                 0         -
+main.rs                            63                63     0.00%           5                 5     0.00%          59                59     0.00%           0                 0         -
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                             734               145    80.25%          44                 5    88.64%         463               105    77.32%           0                 0         -
