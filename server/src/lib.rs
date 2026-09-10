@@ -94,6 +94,7 @@ impl IFilesystemIO for AsyncIOImpl {
         canonicalize(dir).await
     }
 
+    // async rust is hard... I don't know how to break this up and make it more testable lol
     async fn read_dir(&self, cur_path: impl AsRef<Path>) -> io::Result<Vec<Link>> {
         let mut to_ret = vec![];
         let dirs = read_dir(cur_path).await?;
