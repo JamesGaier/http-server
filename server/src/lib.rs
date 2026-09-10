@@ -2,13 +2,12 @@ use handlebars::Handlebars;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
+use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs::{canonicalize, read_dir};
 use tokio::fs::{metadata, read_to_string};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_stream::{StreamExt, wrappers::ReadDirStream};
-//use std::error::Error;
-use std::path::Path;
 // compiler things this is unused even though its used in my tokio_test lol
 #[allow(unused)]
 use std::ffi::OsStr;
